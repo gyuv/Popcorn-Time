@@ -1,4 +1,4 @@
-name: Build all platforms
+name: Build All Platforms
 
 on:
   push:
@@ -17,66 +17,110 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with:
+          node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
-        with: { path: dist }
+        with:
+          path: dist
 
   deploy-web:
     needs: web
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: { name: github-pages, url: '${{ steps.d.outputs.page_url }}' }
+    environment:
+      name: github-pages
+      url: '${{ steps.d.outputs.page_url }}'
     steps:
       - id: d
         uses: actions/deploy-pages@v4
+
+  android-tv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - run: npm run android:tv:sync
+      - run: cd android-tv && chmod +x gradlew && ./gradlew assembleRelease
+      - run: cp android-tv/app/build/outputs/apk/release/app-release.apk popcorn-time-tv.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: popcorn-time-tv-apk
+          path: popcorn-time-tv.apk
+
+  android-mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - run: npm run android:mobile:sync
+      - run: cd android-mobile && chmod +x gradlew && ./gradlew assembleRelease
+      - run: cp android-mobile/app/build/outputs/apk/release/app-release.apk popcorn-time-mobile.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: popcorn-time-mobile-apk
+          path: popcorn-time-mobile.apk
 
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with:
+          node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run dist:win
       - uses: actions/upload-artifact@v4
-        with: { name: popcorn-time-windows, path: 'release/*.exe' }
+        with:
+          name: popcorn-time-windows
+          path: 'dist/*.exe'
 
   mac:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with:
+          node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run dist:mac
-        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
-        with: { name: popcorn-time-mac-universal, path: 'release/*.dmg' }
-
-  android:
-    # One APK serves both phones/tablets and Android TV (leanback launcher enabled).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 21 }
-      - run: npm ci
-      - run: npx vite build && npx cap sync android
-      - run: cd android && chmod +x gradlew && ./gradlew assembleDebug
-      - run: mv android/app/build/outputs/apk/debug/app-debug.apk popcorn-time-android.apk
-      - uses: actions/upload-artifact@v4
-        with: { name: popcorn-time-android-apk, path: popcorn-time-android.apk }
+        with:
+          name: popcorn-time-mac-universal
+          path: |
+            dist/*.dmg
+            dist/*.zip
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, mac, android]
+    needs: [android-tv, android-mobile, windows, mac]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
-        with: { path: out }
+        with:
+          path: out
       - uses: softprops/action-gh-release@v2
-        with: { files: 'out/**/*' }
+        with:
+          files: 'out/**/*'
