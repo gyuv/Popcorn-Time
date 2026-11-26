@@ -5116,3 +5116,26 @@ html.android-mobile .main {
     padding-bottom: calc(74px + env(safe-area-inset-bottom, 0px));
 }
 
+.home-lang-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 48px 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.home-lang-bar::-webkit-scrollbar {
+    display: none;
+}
+
+.home-lang-bar .tv-pref-chip {
+    flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+    .home-lang-bar {
+        padding: 12px 14px 2px;
+    }
+}
+

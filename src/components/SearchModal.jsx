@@ -3,6 +3,7 @@ import { tmdbFetch, imgUrl } from "../utils/api";
 import { SearchIcon, CloseIcon } from "./Icons";
 import { storage } from "../utils/storage";
 import { setGamepadFocus } from "../utils/gamepadSpatialNav";
+import { isAndroidTv } from "../utils/platform";
 
 const HISTORY_KEY = "searchHistory";
 const MAX_HISTORY = 12;
@@ -24,7 +25,7 @@ export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
 
   useEffect(() => {
     const tid = setTimeout(() => {
-      if (window.AndroidBridge) {
+      if (isAndroidTv()) {
         if (inputRef.current) setGamepadFocus(inputRef.current, { scroll: false });
       } else {
         inputRef.current?.focus();

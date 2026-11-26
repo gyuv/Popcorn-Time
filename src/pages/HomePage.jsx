@@ -9,6 +9,11 @@ import { isRestricted } from "../utils/ageRating";
 import { storage } from "../utils/storage";
 import { loadHomeLayout, loadHomeViewMode } from "../utils/homeLayout";
 import { isAndroidTv } from "../utils/platform";
+import {
+  PREFERRED_LANGUAGES,
+  loadTvPrefs,
+  saveTvPrefs,
+} from "../utils/tvPrefs";
 
 /**
  * Extract up to `count` unique, recently watched items from the user's
@@ -53,10 +58,42 @@ export default function HomePage({
   apiKey,
   onOpenPrefs,
 }) {
-  const hero = trending[0];
-
   const [recommendedItems, setRecommendedItems] = useState([]);
   const [topRatedItems, setTopRatedItems] = useState([]);
+  const [tvPrefs, setTvPrefs] = useState(loadTvPrefs);
+  const [langMovies, setLangMovies] = useState(null);
+  const [langTV, setLangTV] = useState(null);
+  const [langTopRated, setLangTopRated] = useState(null);
+  const [tmdbLangTick, setTmdbLangTick] = useState(0);
+
+  useEffect(() => {
+    const onPrefs = (e) => setTvPrefs(e.detail || loadTvPrefs());
+    const onMetaLang = () => setTmdbLangTick((t) => t + 1);
+    window.addEventListener("popcorntime:tv-prefs-changed", onPrefs);
+    window.addEventListener("streambert:tmdb-lang-changed", onMetaLang);
+    return () => {
+      window.removeEventListener("popcorntime:tv-prefs-changed", onPrefs);
+      window.removeEventListener("streambert:tmdb-lang-changed", onMetaLang);
+    };
+  }, []);
+
+  const selectedLangs = tvPrefs.preferredLanguages || [];
+  const togglePrefLang = useCallback((code) => {
+    const cur = loadTvPrefs();
+    const list = cur.preferredLanguages || [];
+    const nextLangs = list.includes(code)
+      ? list.filter((c) => c !== code)
+      : [...list, code];
+    const next = { ...cur, preferredLanguages: nextLangs };
+    setTvPrefs(next);
+    saveTvPrefs(next);
+  }, []);
+  const clearPrefLangs = useCallback(() => {
+    const cur = loadTvPrefs();
+    const next = { ...cur, preferredLanguages: [] };
+    setTvPrefs(next);
+    saveTvPrefs(next);
+  }, []);
 
   // Load layout config (order + visibility) once on mount
   const [layout] = useState(() => loadHomeLayout());
@@ -64,16 +101,93 @@ export default function HomePage({
 
   const [viewMode] = useState(() => loadHomeViewMode());
 
+  // Fetch language-specific shelves whenever preferred content languages are active
+  useEffect(() => {
+    if (!apiKey || offline || selectedLangs.length === 0) {
+      setLangMovies(null);
+      setLangTV(null);
+      setLangTopRated(null);
+      return;
+    }
+    let cancelled = false;
+    const langParam = `&with_original_language=${selectedLangs.join("|")}`;
+    Promise.all([
+      tmdbFetch(
+        `/discover/movie?sort_by=popularity.desc&vote_count.gte=20${langParam}&page=1`,
+        apiKey,
+      ).then((d) => (d.results || []).map((i) => ({ ...i, media_type: "movie" }))),
+      tmdbFetch(
+        `/discover/tv?sort_by=popularity.desc&vote_count.gte=15${langParam}&page=1`,
+        apiKey,
+      ).then((d) => (d.results || []).map((i) => ({ ...i, media_type: "tv" }))),
+      tmdbFetch(
+        `/discover/movie?sort_by=vote_average.desc&vote_count.gte=100${langParam}&page=1`,
+        apiKey,
+      ).then((d) => (d.results || []).map((i) => ({ ...i, media_type: "movie" }))),
+      tmdbFetch(
+        `/discover/tv?sort_by=vote_average.desc&vote_count.gte=50${langParam}&page=1`,
+        apiKey,
+      ).then((d) => (d.results || []).map((i) => ({ ...i, media_type: "tv" }))),
+    ])
+      .then(([movies, tv, topM, topT]) => {
+        if (cancelled) return;
+        const mergedTop = [];
+        const max = Math.max(topM.length, topT.length);
+        for (let i = 0; i < Math.min(max, 10); i++) {
+          if (topM[i]) mergedTop.push(topM[i]);
+          if (topT[i]) mergedTop.push(topT[i]);
+        }
+        setLangMovies(movies);
+        setLangTV(tv);
+        setLangTopRated(mergedTop);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [apiKey, offline, selectedLangs.join("|"), tmdbLangTick]);
+
+  // Stable pre-built item arrays for carousels
+  const trendingMovieItems = useMemo(
+    () =>
+      selectedLangs.length > 0 && langMovies
+        ? langMovies.slice(0, 14)
+        : trending.slice(0, 10).map((i) => ({ ...i, media_type: "movie" })),
+    [selectedLangs.length, langMovies, trending],
+  );
+  const trendingTVItems = useMemo(
+    () =>
+      selectedLangs.length > 0 && langTV
+        ? langTV.slice(0, 14)
+        : trendingTV.slice(0, 10).map((i) => ({ ...i, media_type: "tv" })),
+    [selectedLangs.length, langTV, trendingTV],
+  );
+  const effectiveTopRatedItems = useMemo(
+    () =>
+      selectedLangs.length > 0 && langTopRated ? langTopRated : topRatedItems,
+    [selectedLangs.length, langTopRated, topRatedItems],
+  );
+  const hero =
+    (selectedLangs.length > 0 &&
+      (langMovies?.find((m) => m.backdrop_path) || langMovies?.[0])) ||
+    trending[0];
+
   // All items for batch ratings fetch
   const allItems = useMemo(
     () => [
       ...inProgress,
-      ...trending.map((i) => ({ ...i, media_type: "movie" })),
-      ...trendingTV.map((i) => ({ ...i, media_type: "tv" })),
+      ...trendingMovieItems,
+      ...trendingTVItems,
       ...recommendedItems,
-      ...topRatedItems,
+      ...effectiveTopRatedItems,
     ],
-    [inProgress, trending, trendingTV, recommendedItems, topRatedItems],
+    [
+      inProgress,
+      trendingMovieItems,
+      trendingTVItems,
+      recommendedItems,
+      effectiveTopRatedItems,
+    ],
   );
 
   const { ratingsMap, ageLimitSetting } = useRatings(allItems);
@@ -98,10 +212,17 @@ export default function HomePage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratingsMap, ageLimitSetting]);
 
-  // Filter recommended items that exceed age limit setting
+  // Filter recommended items that exceed age limit setting, and prioritize preferred languages
   const filteredRecommendedItems = useMemo(() => {
-    return recommendedItems.filter((item) => !itemRestricted(item));
-  }, [recommendedItems, itemRestricted]);
+    const allowed = recommendedItems.filter((item) => !itemRestricted(item));
+    if (selectedLangs.length === 0) return allowed;
+    const prefSet = new Set(selectedLangs);
+    return [...allowed].sort(
+      (a, b) =>
+        (prefSet.has(b.original_language) ? 1 : 0) -
+        (prefSet.has(a.original_language) ? 1 : 0),
+    );
+  }, [recommendedItems, itemRestricted, selectedLangs]);
 
   // Fetch personalised recommendations from multiple recent history items
   useEffect(() => {
@@ -167,7 +288,7 @@ export default function HomePage({
 
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, offline, history?.length]);
+  }, [apiKey, offline, history?.length, tmdbLangTick]);
 
   // Fetch top rated movies + TV, merge and shuffle
   useEffect(() => {
@@ -200,17 +321,7 @@ export default function HomePage({
       });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, offline]);
-
-  // Stable pre-built item arrays for carousels, capped at 10
-  const trendingMovieItems = useMemo(
-    () => trending.slice(0, 10).map((i) => ({ ...i, media_type: "movie" })),
-    [trending],
-  );
-  const trendingTVItems = useMemo(
-    () => trendingTV.slice(0, 10).map((i) => ({ ...i, media_type: "tv" })),
-    [trendingTV],
-  );
+  }, [apiKey, offline, tmdbLangTick]);
 
   if (isAndroidTv()) {
     return (
@@ -292,13 +403,20 @@ export default function HomePage({
           />
           <div className="hero-gradient" />
           <div className="hero-content">
-            <div className="hero-type">Trending · Movie</div>
+            <div className="hero-type">
+              {hero.media_type === "tv" ? "Trending · Series" : "Trending · Movie"}
+              {hero.original_language
+                ? ` · ${hero.original_language.toUpperCase()}`
+                : ""}
+            </div>
             <div className="hero-title">{hero.title || hero.name}</div>
             <div className="hero-meta">
               <span className="hero-rating">
                 <StarIcon /> {hero.vote_average?.toFixed(1)}
               </span>
-              <span>{hero.release_date?.slice(0, 4)}</span>
+              <span>
+                {(hero.release_date || hero.first_air_date || "").slice(0, 4)}
+              </span>
             </div>
             <div className="hero-overview">{hero.overview}</div>
             <div className="hero-actions">
@@ -316,6 +434,31 @@ export default function HomePage({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Content Language Quick Filter ── */}
+      {!offline && !loading && (
+        <div className="home-lang-bar">
+          <button
+            className={`tv-pref-chip${selectedLangs.length === 0 ? " tv-pref-chip--active" : ""}`}
+            onClick={clearPrefLangs}
+          >
+            {selectedLangs.length === 0 ? "✓ " : ""}All Languages
+          </button>
+          {PREFERRED_LANGUAGES.map((l) => {
+            const active = selectedLangs.includes(l.code);
+            return (
+              <button
+                key={l.code}
+                className={`tv-pref-chip${active ? " tv-pref-chip--active" : ""}`}
+                onClick={() => togglePrefLang(l.code)}
+              >
+                {active ? "✓ " : ""}
+                {l.label}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -458,13 +601,18 @@ export default function HomePage({
         }
 
         if (id === "topRated") {
-          if (topRatedItems.length === 0) return null;
+          if (effectiveTopRatedItems.length === 0) return null;
           if (viewMode === "list")
-            return renderList("topRated", "Top Rated", null, topRatedItems);
+            return renderList(
+              "topRated",
+              "Top Rated",
+              null,
+              effectiveTopRatedItems,
+            );
           return (
             <TrendingCarousel
               key="topRated"
-              items={topRatedItems}
+              items={effectiveTopRatedItems}
               title="Top Rated"
               onSelect={onSelect}
               ratingsMap={enrichedRatingsMap}
