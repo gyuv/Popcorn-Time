@@ -60,6 +60,7 @@ export default function HomePage({
 }) {
   const [recommendedItems, setRecommendedItems] = useState([]);
   const [topRatedItems, setTopRatedItems] = useState([]);
+  const [latestMovies, setLatestMovies] = useState([]);
   const [tvPrefs, setTvPrefs] = useState(loadTvPrefs);
   const [langMovies, setLangMovies] = useState(null);
   const [langTV, setLangTV] = useState(null);
@@ -172,10 +173,39 @@ export default function HomePage({
       (langMovies?.find((m) => m.backdrop_path) || langMovies?.[0])) ||
     trending[0];
 
+  // Fetch Latest Movies (respects selected content languages and metadata language)
+  useEffect(() => {
+    if (!apiKey || offline) return;
+    let cancelled = false;
+    const today = new Date().toISOString().slice(0, 10);
+    const minVotes = selectedLangs.length > 0 ? 5 : 20;
+    const langParam =
+      selectedLangs.length > 0
+        ? `&with_original_language=${selectedLangs.join("|")}`
+        : "";
+    tmdbFetch(
+      `/discover/movie?sort_by=primary_release_date.desc&primary_release_date.lte=${today}&vote_count.gte=${minVotes}${langParam}&page=1`,
+      apiKey,
+    )
+      .then((d) => {
+        if (cancelled) return;
+        const list = (d.results || [])
+          .filter((m) => m.poster_path)
+          .slice(0, 14)
+          .map((m) => ({ ...m, media_type: "movie" }));
+        setLatestMovies(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [apiKey, offline, selectedLangs.join("|"), tmdbLangTick]);
+
   // All items for batch ratings fetch
   const allItems = useMemo(
     () => [
       ...inProgress,
+      ...latestMovies,
       ...trendingMovieItems,
       ...trendingTVItems,
       ...recommendedItems,
@@ -183,6 +213,7 @@ export default function HomePage({
     ],
     [
       inProgress,
+      latestMovies,
       trendingMovieItems,
       trendingTVItems,
       recommendedItems,
@@ -211,6 +242,11 @@ export default function HomePage({
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratingsMap, ageLimitSetting]);
+
+  const filteredLatestMovies = useMemo(
+    () => latestMovies.filter((item) => !itemRestricted(item)),
+    [latestMovies, itemRestricted],
+  );
 
   // Filter recommended items that exceed age limit setting, and prioritize preferred languages
   const filteredRecommendedItems = useMemo(() => {
@@ -540,83 +576,57 @@ export default function HomePage({
           );
         };
 
-        if (id === "recommended") {
-          if (filteredRecommendedItems.length === 0) return null;
-          if (viewMode === "list")
-            return renderList(
-              "recommended",
-              "Recommended for You",
-              null,
-              filteredRecommendedItems,
-            );
+        const renderSectionRow = (key, title, items) => {
+          if (!items || items.length === 0) return null;
+          if (viewMode === "list") return renderList(key, title, null, items);
           return (
             <TrendingCarousel
-              key="recommended"
-              items={filteredRecommendedItems}
-              title="Recommended for You"
+              key={key}
+              items={items}
+              title={title}
               onSelect={onSelect}
               ratingsMap={enrichedRatingsMap}
             />
+          );
+        };
+
+        if (id === "latestMovies") {
+          return renderSectionRow(
+            "latestMovies",
+            "Latest Movies",
+            filteredLatestMovies,
+          );
+        }
+
+        if (id === "recommended") {
+          return renderSectionRow(
+            "recommended",
+            "Recommended for You",
+            filteredRecommendedItems,
           );
         }
 
         if (id === "trendingMovies") {
-          if (trendingMovieItems.length === 0) return null;
-          if (viewMode === "list")
-            return renderList(
-              "trendingMovies",
-              "Trending Movies",
-              null,
-              trendingMovieItems,
-            );
-          return (
-            <TrendingCarousel
-              key="trendingMovies"
-              items={trendingMovieItems}
-              title="Trending Movies"
-              onSelect={onSelect}
-              ratingsMap={enrichedRatingsMap}
-            />
+          return renderSectionRow(
+            "trendingMovies",
+            "Trending Movies",
+            trendingMovieItems,
           );
         }
 
         if (id === "trendingTV") {
-          if (trendingTVItems.length === 0) return null;
-          if (viewMode === "list")
-            return renderList(
-              "trendingTV",
-              "Trending Series",
-              null,
-              trendingTVItems,
-            );
-          return (
-            <TrendingCarousel
-              key="trendingTV"
-              items={trendingTVItems}
-              title="Trending Series"
-              onSelect={onSelect}
-              ratingsMap={enrichedRatingsMap}
-            />
+          return renderSectionRow(
+            "trendingTV",
+            "Trending Series",
+            trendingTVItems,
           );
         }
 
         if (id === "topRated") {
-          if (effectiveTopRatedItems.length === 0) return null;
-          if (viewMode === "list")
-            return renderList(
-              "topRated",
-              "Top Rated",
-              null,
-              effectiveTopRatedItems,
-            );
-          return (
-            <TrendingCarousel
-              key="topRated"
-              items={effectiveTopRatedItems}
-              title="Top Rated"
-              onSelect={onSelect}
-              ratingsMap={enrichedRatingsMap}
-            />
+          return renderSectionRow(
+            "topRated",
+            "Top Rated",
+            effectiveTopRatedItems,
           );
         }
 
